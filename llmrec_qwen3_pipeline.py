@@ -16,6 +16,12 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
+def progress(prefix: str, current: int, total: int) -> None:
+    total = max(total, 1)
+    pct = 100.0 * float(current) / float(total)
+    print(f"[PROGRESS][{prefix}] {current}/{total} ({pct:.2f}%)")
+
+
 # -----------------------------
 # Data loading
 # -----------------------------
@@ -268,9 +274,14 @@ def main():
     parser.add_argument("--eval_negatives", type=int, default=1000)
     parser.add_argument("--max_aug_users", type=int, default=300)
     parser.add_argument("--max_aug_items", type=int, default=1000)
+    parser.add_argument("--eval_user_source", type=str, choices=["test", "all_known"], default="test")
+    parser.add_argument("--progress_user_every", type=int, default=10)
+    parser.add_argument("--progress_item_every", type=int, default=50)
+    parser.add_argument("--progress_step_every", type=int, default=10)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
+    print("[STAGE] loading data files")
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -284,13 +295,21 @@ def main():
     train_pos = parse_user_items_file(train_file)
     test_pos = parse_user_items_file(test_file)
     item_desc = load_item_desc(item_desc_file)
+    print(f"[LOAD] train_file={train_file}, users={len(train_pos)}")
+    print(f"[LOAD] test_file={test_file}, users={len(test_pos)}")
+    print(f"[LOAD] item_desc_file={item_desc_file}, items={len(item_desc)}")
 
-    all_users = sorted(set(train_pos.keys()) | set(test_pos.keys()))
+    train_users = sorted(train_pos.keys())
+    test_users = sorted(test_pos.keys())
+    all_users = sorted(set(train_users) | set(test_users))
     all_items = sorted(item_desc.keys())
     n_users = max(all_users) + 1
     n_items = max(all_items) + 1
 
-    print(f"[INFO] dataset={args.dataset} users={n_users} items={n_items}")
+    print(
+        f"[INFO] dataset={args.dataset} total_users={n_users} "
+        f"train_users={len(train_users)} test_users={len(test_users)} items={n_items}"
+    )
 
     cache_dir = os.path.join(args.output_dir, args.dataset)
     ensure_dir(cache_dir)
@@ -316,6 +335,7 @@ def main():
             item_attrs = json.load(open(item_attr_path, "r", encoding="utf-8"))
 
         aug_users = list(train_pos.keys())[: args.max_aug_users]
+        print(f"[AUG] user_augmentation_total={len(aug_users)}")
         for idx, u in enumerate(aug_users, 1):
             key = str(u)
             history = train_pos[u]
@@ -340,18 +360,19 @@ def main():
                 except Exception:
                     pass
 
-            if idx % 10 == 0:
-                print(f"[AUG][USER] processed={idx}/{len(aug_users)}")
+            if idx % max(1, args.progress_user_every) == 0 or idx == len(aug_users):
+                progress("AUG-USER", idx, len(aug_users))
 
         aug_items = all_items[: args.max_aug_items]
+        print(f"[AUG] item_augmentation_total={len(aug_items)}")
         for idx, i in enumerate(aug_items, 1):
             key = str(i)
             if key in item_attrs:
                 continue
             prompt = build_item_attr_prompt(i, item_desc)
             item_attrs[key] = llm.generate(prompt, max_new_tokens=80)
-            if idx % 50 == 0:
-                print(f"[AUG][ITEM] processed={idx}/{len(aug_items)}")
+            if idx % max(1, args.progress_item_every) == 0 or idx == len(aug_items):
+                progress("AUG-ITEM", idx, len(aug_items))
 
         json.dump(ui_aug, open(ui_aug_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
         json.dump(user_profiles, open(user_profile_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
@@ -381,6 +402,7 @@ def main():
 
         steps_per_epoch = max(1, len(train_pos) // max(1, args.batch_size))
         for ep in range(1, args.epochs + 1):
+            print(f"[TRAIN] epoch_start={ep}/{args.epochs}")
             model.train()
             running = 0.0
             pbar = tqdm(range(steps_per_epoch), desc=f"epoch {ep}/{args.epochs}")
@@ -411,8 +433,9 @@ def main():
                 opt.step()
 
                 running += float(bpr.item())
-                if (step + 1) % 10 == 0:
+                if (step + 1) % max(1, args.progress_step_every) == 0:
                     pbar.set_postfix({"bpr_loss": f"{running/(step+1):.4f}"})
+                    progress(f"TRAIN-E{ep}", step + 1, steps_per_epoch)
 
             print(f"[TRAIN] epoch={ep} avg_bpr_loss={running/steps_per_epoch:.6f}")
 
@@ -435,7 +458,11 @@ def main():
         user_feat = torch.from_numpy(ckpt["user_feat"]).to(args.device)
         item_feat = torch.from_numpy(ckpt["item_feat"]).to(args.device)
 
-        users_eval = sorted([u for u in test_pos if len(test_pos[u]) > 0])
+        if args.eval_user_source == "test":
+            users_eval = sorted([u for u in test_pos if len(test_pos[u]) > 0])
+        else:
+            users_eval = sorted([u for u in all_users if len(test_pos.get(u, [])) > 0])
+        print(f"[EVAL] user_source={args.eval_user_source}, eval_users={len(users_eval)}")
         metrics = {"hr10": 0.0, "hr20": 0.0, "hr40": 0.0, "ndcg10": 0.0, "ndcg20": 0.0, "ndcg40": 0.0, "rank": 0.0}
 
         for idx, u in enumerate(users_eval, 1):

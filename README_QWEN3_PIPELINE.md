@@ -26,3 +26,8 @@ or directly:
 ```bash
 python llmrec_qwen3_pipeline.py --data_dir LLMRec-new-data --dataset Baby_Products --stage all --output_dir outputs_qwen3_pipeline
 ```
+
+If you want to evaluate **only test-split users**, keep:
+```bash
+python llmrec_qwen3_pipeline.py --stage eval --eval_user_source test ...
+```

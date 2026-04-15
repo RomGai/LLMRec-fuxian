@@ -26,4 +26,5 @@ python llmrec_qwen3_pipeline.py \
   --dataset Baby_Products \
   --output_dir outputs_qwen3_pipeline \
   --stage eval \
+  --eval_user_source test \
   --eval_negatives 1000
