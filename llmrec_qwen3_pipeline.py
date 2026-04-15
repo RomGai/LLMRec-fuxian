@@ -5,6 +5,7 @@ import json
 import math
 import os
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
@@ -20,6 +21,72 @@ def progress(prefix: str, current: int, total: int) -> None:
     total = max(total, 1)
     pct = 100.0 * float(current) / float(total)
     print(f"[PROGRESS][{prefix}] {current}/{total} ({pct:.2f}%)")
+
+
+def build_80_20_split_from_pairs(
+    pairs_tsv: str,
+    split_train_out: str,
+    split_test_out: str,
+    split_ratio: float = 0.8,
+    progress_every_users: int = 1000,
+) -> Tuple[int, int]:
+    """Build user-wise chronological 80/20 split from *_u_i_pairs.tsv.
+
+    Returns:
+        (n_train_users, n_test_users)
+    """
+    user_events: Dict[int, List[Tuple[int, int]]] = defaultdict(list)
+
+    print(f"[SPLIT] reading pairs file: {pairs_tsv}")
+    with open(pairs_tsv, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        for row in reader:
+            try:
+                u = int((row.get("user_id") or "").strip())
+                i = int((row.get("item_id") or "").strip())
+                ts = int((row.get("timestamp") or "0").strip() or 0)
+            except ValueError:
+                continue
+            user_events[u].append((ts, i))
+
+    users = sorted(user_events.keys())
+    print(f"[SPLIT] total users in pairs={len(users)}")
+
+    train_map: Dict[int, List[int]] = {}
+    test_map: Dict[int, List[int]] = {}
+    for idx, u in enumerate(users, 1):
+        events = sorted(user_events[u], key=lambda x: x[0])
+        items = [i for _, i in events]
+        if len(items) == 0:
+            continue
+        if len(items) == 1:
+            train_items, test_items = items, []
+        else:
+            cut = int(len(items) * split_ratio)
+            cut = min(max(cut, 1), len(items) - 1)
+            train_items = items[:cut]
+            test_items = items[cut:]
+        train_map[u] = train_items
+        if test_items:
+            test_map[u] = test_items
+
+        if idx % max(1, progress_every_users) == 0 or idx == len(users):
+            progress("SPLIT-USERS", idx, len(users))
+
+    os.makedirs(os.path.dirname(split_train_out), exist_ok=True)
+    with open(split_train_out, "w", encoding="utf-8") as f:
+        for u in sorted(train_map.keys()):
+            pos = ",".join(str(x) for x in train_map[u])
+            f.write(f"{u}\t{pos}\t\n")
+    with open(split_test_out, "w", encoding="utf-8") as f:
+        for u in sorted(test_map.keys()):
+            pos = ",".join(str(x) for x in test_map[u])
+            f.write(f"{u}\t{pos}\t\n")
+
+    print(f"[SPLIT] train users={len(train_map)}, test users={len(test_map)}")
+    print(f"[SPLIT] wrote train split: {split_train_out}")
+    print(f"[SPLIT] wrote test split:  {split_test_out}")
+    return len(train_map), len(test_map)
 
 
 # -----------------------------
@@ -275,6 +342,8 @@ def main():
     parser.add_argument("--max_aug_users", type=int, default=300)
     parser.add_argument("--max_aug_items", type=int, default=1000)
     parser.add_argument("--eval_user_source", type=str, choices=["test", "all_known"], default="test")
+    parser.add_argument("--auto_split_80_20", action="store_true")
+    parser.add_argument("--split_ratio", type=float, default=0.8)
     parser.add_argument("--progress_user_every", type=int, default=10)
     parser.add_argument("--progress_item_every", type=int, default=50)
     parser.add_argument("--progress_step_every", type=int, default=10)
@@ -288,9 +357,27 @@ def main():
 
     ensure_dir(args.output_dir)
 
-    train_file = os.path.join(args.data_dir, f"{args.dataset}_user_items_negs_train.csv")
-    test_file = os.path.join(args.data_dir, f"{args.dataset}_user_items_negs_test.csv")
+    default_train_file = os.path.join(args.data_dir, f"{args.dataset}_user_items_negs_train.csv")
+    default_test_file = os.path.join(args.data_dir, f"{args.dataset}_user_items_negs_test.csv")
+    train_file = default_train_file
+    test_file = default_test_file
     item_desc_file = os.path.join(args.data_dir, f"{args.dataset}_item_desc.tsv")
+    pairs_file = os.path.join(args.data_dir, f"{args.dataset}_u_i_pairs.tsv")
+
+    if args.auto_split_80_20:
+        print("[STAGE] preparing 80/20 split from u_i_pairs")
+        split_dir = os.path.join(args.output_dir, "splits")
+        train_file = os.path.join(split_dir, f"{args.dataset}_user_items_negs_train.csv")
+        test_file = os.path.join(split_dir, f"{args.dataset}_user_items_negs_test.csv")
+        build_80_20_split_from_pairs(
+            pairs_tsv=pairs_file,
+            split_train_out=train_file,
+            split_test_out=test_file,
+            split_ratio=args.split_ratio,
+            progress_every_users=max(100, args.progress_user_every * 10),
+        )
+    else:
+        print("[STAGE] using existing train/test split files from data_dir (no re-split)")
 
     train_pos = parse_user_items_file(train_file)
     test_pos = parse_user_items_file(test_file)

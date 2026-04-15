@@ -22,6 +22,15 @@ Uses:
 bash run_llmrec_new_data_qwen3.sh
 ```
 
+The script is now a **single entry** that runs:
+1. augmentation
+2. training
+3. evaluation (test split only)
+
+By default it directly uses existing split files in `LLMRec-new-data`:
+- `*_user_items_negs_train.csv`
+- `*_user_items_negs_test.csv`
+
 or directly:
 ```bash
 python llmrec_qwen3_pipeline.py --data_dir LLMRec-new-data --dataset Baby_Products --stage all --output_dir outputs_qwen3_pipeline
@@ -30,4 +39,9 @@ python llmrec_qwen3_pipeline.py --data_dir LLMRec-new-data --dataset Baby_Produc
 If you want to evaluate **only test-split users**, keep:
 ```bash
 python llmrec_qwen3_pipeline.py --stage eval --eval_user_source test ...
+```
+
+Optional: if you still want to rebuild split from `*_u_i_pairs.tsv`, enable:
+```bash
+python llmrec_qwen3_pipeline.py --auto_split_80_20 --split_ratio 0.8 ...
 ```
