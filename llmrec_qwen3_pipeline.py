@@ -30,21 +30,42 @@ def parse_user_items_file(path: str) -> Dict[int, List[int]]:
             parts = line.split("\t")
             if len(parts) < 2:
                 continue
-            user = int(parts[0])
-            pos = [int(x) for x in parts[1].split(",") if x != ""]
+            try:
+                user = int(parts[0].strip())
+            except ValueError:
+                continue
+            pos = []
+            for x in parts[1].split(","):
+                x = x.strip()
+                if not x:
+                    continue
+                try:
+                    pos.append(int(x))
+                except ValueError:
+                    continue
+            if not pos:
+                continue
             data[user] = pos
     return data
 
 
 def load_item_desc(path: str) -> Dict[int, Dict[str, str]]:
     out: Dict[int, Dict[str, str]] = {}
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f, delimiter="\t")
         for row in reader:
-            iid = int(row["item_id"])
+            raw_iid = (row.get("item_id") or "").strip()
+            if not raw_iid:
+                continue
+            try:
+                iid = int(raw_iid)
+            except ValueError:
+                # Some data files may contain malformed rows (e.g., whitespace-only IDs).
+                # Skip these rows instead of crashing.
+                continue
             out[iid] = {
-                "summary": row.get("summary", "") or "",
-                "image": row.get("image", "") or "",
+                "summary": (row.get("summary", "") or "").strip(),
+                "image": (row.get("image", "") or "").strip(),
             }
     return out
 
