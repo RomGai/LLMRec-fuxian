@@ -312,6 +312,16 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def load_checkpoint_compat(path: str, map_location: str):
+    """Compatibility loader for PyTorch>=2.6 (weights_only default changed)."""
+    try:
+        # PyTorch 2.6+: default weights_only=True can fail for checkpoints with numpy arrays.
+        return torch.load(path, map_location=map_location, weights_only=False)
+    except TypeError:
+        # Older PyTorch versions do not support the weights_only argument.
+        return torch.load(path, map_location=map_location)
+
+
 def check_prompt_consistency() -> None:
     required_markers = [
         "User history:",
@@ -537,7 +547,7 @@ def main():
 
     if args.stage in ["eval", "all"]:
         print("[STAGE] evaluation on 1 target + 1000 random negatives")
-        ckpt = torch.load(model_path, map_location=args.device)
+        ckpt = load_checkpoint_compat(model_path, map_location=args.device)
         model = SimpleLLMRecBPR(ckpt["n_users"], ckpt["n_items"], args.emb_dim, args.feat_dim).to(args.device)
         model.load_state_dict(ckpt["model"])
         model.eval()
